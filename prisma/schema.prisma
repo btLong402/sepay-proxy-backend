@@ -1,0 +1,98 @@
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id                     String        @id @default(uuid())
+  email                  String        @unique
+  encryptedWebhookSecret String?
+  status                 String        @default("ACTIVE")
+  createdAt              DateTime      @default(now())
+  updatedAt              DateTime      @updatedAt
+  bankAccounts           BankAccount[]
+  transactions           Transaction[]
+  fcmTokens              FcmToken[]
+
+  @@map("users")
+}
+
+model BankAccount {
+  id            String        @id @default(uuid())
+  userId        String
+  accountNumber String        @unique
+  bankName      String
+  createdAt     DateTime      @default(now())
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("bank_accounts")
+}
+
+model Transaction {
+  id               String            @id @default(uuid())
+  sepayId          String            @unique
+  userId           String?
+  amount           Float
+  content          String?
+  transferDate     DateTime
+  createdAt        DateTime          @default(now())
+  user             User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  notificationLogs NotificationLog[]
+
+  @@map("transactions")
+}
+
+model FcmToken {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("fcm_tokens")
+}
+
+model NotificationLog {
+  id            String       @id @default(uuid())
+  transactionId String?
+  fcmTokenId    String?
+  status        String
+  errorReason   String?
+  dispatchedAt  DateTime     @default(now())
+  transaction   Transaction? @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  @@map("notification_logs")
+}
+
+model ErrorLog {
+  id         String   @id @default(uuid())
+  context    String
+  message    String
+  stackTrace String?
+  createdAt  DateTime @default(now())
+
+  @@map("error_logs")
+}
+
+model WebhookEvent {
+  id              String   @id @default(uuid())
+  provider        String   @default("SEPAY")
+  payload         Json
+  processedStatus String
+  createdAt       DateTime @default(now())
+
+  @@map("webhook_events")
+}
+
+model AuditTrail {
+  id        String   @id @default(uuid())
+  userId    String?
+  action    String
+  details   String?
+  createdAt DateTime @default(now())
+
+  @@map("audit_trails")
+}
