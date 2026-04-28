@@ -65,6 +65,8 @@ export class WebhookService {
 
     if (!transaction) {
       try {
+        let outboxEventId: string | null = null;
+
         transaction = await this.prisma.$transaction(
           async (tx) => {
             await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${sepayId}))`;
@@ -79,7 +81,7 @@ export class WebhookService {
             });
             if (existing) return existing;
 
-            return tx.transaction.create({
+            const newTx = await tx.transaction.create({
               data: {
                 sepayId,
                 userId: user.id,
@@ -88,11 +90,40 @@ export class WebhookService {
                 transferDate,
               },
             });
+
+            const tokens = user.fcmTokens ? user.fcmTokens.map((t) => t.token) : [];
+            const outbox = await tx.outboxEvent.create({
+              data: {
+                idempotencyKey: `${sepayId}_${user.id}_MONEY_IN`,
+                eventType: 'TRANSACTION_CREATED',
+                aggregateId: newTx.id,
+                aggregateType: 'TRANSACTION',
+                payload: {
+                  transactionId: newTx.id,
+                  userId: user.id,
+                  notificationType: 'MONEY_IN',
+                  deviceTargets: tokens,
+                  metadata: {
+                    amount,
+                    content,
+                  },
+                } as any,
+                status: 'PENDING',
+              },
+            });
+
+            outboxEventId = outbox.id;
+
+            return newTx;
           },
           {
             isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
           },
         );
+
+        if (outboxEventId) {
+          await this.qstashService.publishOutboxEvent(outboxEventId);
+        }
       } catch (error) {
         if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
           transaction = await this.prisma.transaction.findUnique({
@@ -111,37 +142,6 @@ export class WebhookService {
 
     if (!transaction) {
       throw new Error('Failed to fetch or create transaction');
-    }
-
-    // 3. Gửi FCM Notification và đối soát (Audit)
-    if (user.fcmTokens && user.fcmTokens.length > 0) {
-      // Lấy danh sách các thiết bị đã gửi thông báo thành công trước đó
-      const existingLogs = await this.prisma.notificationLog.findMany({
-        where: {
-          transactionId: transaction.id,
-          status: 'SUCCESS',
-        },
-      });
-      const successfulTokenIds = existingLogs.map((log) => log.fcmTokenId);
-
-      for (const tokenObj of user.fcmTokens) {
-        // Bỏ qua nếu token này đã nhận được thông báo thành công
-        if (successfulTokenIds.includes(tokenObj.id)) {
-          continue;
-        }
-
-        const result = await this.fcmService.sendMoneyIn(tokenObj.token, amount, content);
-
-        // Lưu log trạng thái gửi
-        await this.prisma.notificationLog.create({
-          data: {
-            transactionId: transaction.id,
-            fcmTokenId: tokenObj.id,
-            status: result.success ? 'SUCCESS' : 'FAILED',
-            errorReason: result.success ? null : result.error,
-          },
-        });
-      }
     }
 
     // 4. Lưu log vào Axiom

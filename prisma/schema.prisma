@@ -125,3 +125,36 @@ model AuditTrail {
 
   @@map("audit_trails")
 }
+
+enum OutboxStatus {
+  PENDING
+  PROCESSING
+  PROCESSED
+  FAILED
+  DEAD_LETTER
+  RETRY_SCHEDULED
+}
+
+model OutboxEvent {
+  id               String       @id @default(uuid())
+  idempotencyKey   String?      @unique
+  eventType        String
+  aggregateId      String
+  aggregateType    String
+  occurredAt       DateTime     @default(now())
+  processedAt      DateTime?
+  schemaVersion    Int          @default(1)
+  eventVersion     Int          @default(1)
+  correlationId    String?
+  payload          Json
+  status           OutboxStatus @default(PENDING)
+  retryCount       Int          @default(0)
+  nextRetryAt      DateTime?
+  lastError        String?
+  lockedBy         String?
+  leaseExpiresAt   DateTime?
+
+  @@index([status, nextRetryAt])
+  @@map("outbox_events")
+}
+

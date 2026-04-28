@@ -32,4 +32,22 @@ export class QstashService implements OnModuleInit {
       },
     });
   }
+
+  async publishOutboxEvent(eventId: string) {
+    if (!this.client) {
+      throw new Error('QStash client is not initialized. Check QSTASH_TOKEN.');
+    }
+
+    const vercelUrl = process.env.VERCEL_URL || 'localhost:3000';
+    const protocol = vercelUrl.startsWith('localhost') ? 'http' : 'https';
+    const callbackUrl = `${protocol}://${vercelUrl}/v1/webhooks/qstash/outbox`;
+
+    return this.client.publishJSON({
+      url: callbackUrl,
+      body: {
+        eventId,
+      },
+      retries: 5,
+    });
+  }
 }

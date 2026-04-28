@@ -10,6 +10,7 @@ import { AuthModule } from './auth/auth.module';
 import { DeviceModule } from './device/device.module';
 import { TransactionModule } from './transaction/transaction.module';
 import { ConfigModule } from '@nestjs/config';
+import { OutboxModule } from './outbox/outbox.module';
 
 
 
@@ -47,6 +48,7 @@ import * as Joi from 'joi';
     AuthModule,
     DeviceModule,
     TransactionModule,
+    OutboxModule,
   ],
   controllers: [AppController],
 
