@@ -57,3 +57,6 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
 # AI Assistant
 .agents/
+
+# service account
+service.json

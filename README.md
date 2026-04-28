@@ -1,98 +1,177 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# SePay Proxy Backend - Tài Liệu Kỹ Thuật Toàn Diện (Production-Grade)
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+---
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## 1. Tổng Quan Dự Án (Project Overview)
 
-## Description
+### Mục tiêu hệ thống
+SePay Proxy Backend là giải pháp trung gian (Proxy) xử lý Webhook tài chính từ hệ thống SePay. Được thiết kế theo kiến trúc Serverless-first, hệ thống đảm bảo khả năng mở rộng không giới hạn, độ trễ thấp và chi phí vận hành tối ưu (0đ ở quy mô nhỏ).
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+### Luồng nghiệp vụ chính
+1. **Tiếp nhận Webhook**: SePay gửi POST request chứa dữ liệu giao dịch.
+2. **Xác thực**: Kiểm tra chữ ký (Signature) hoặc API Key đã mã hóa.
+3. **Bất đồng bộ**: Đẩy dữ liệu vào Upstash QStash Queue để giải phóng kết nối ngay lập tức.
+4. **Xử lý Worker**: QStash gọi lại Worker Endpoint để lưu Database (Supabase) và bắn Push qua Firebase (FCM).
 
-## Project setup
+---
 
-```bash
-$ npm install
+## 2. Các Tính Năng Cốt Lõi (Core Features)
+
+* **Multi-tenant Webhook Processing**: Phân tách dữ liệu tuyệt đối giữa các Tenant.
+* **Idempotency Guarantee**: Cơ chế chống trùng lặp giao dịch (Advisory Locks).
+* **Real-time Push Notifications**: Tích hợp FCM gửi tin nhắn tức thời.
+* **Security Hardening**: Mã hóa AES-256-GCM cho thông tin nhạy cảm.
+* **Observability**: Giám sát toàn diện qua Sentry và Axiom.
+
+---
+
+## 3. Công Nghệ Sử Dụng (Technology Stack)
+
+| Thành phần | Công nghệ |
+| :--- | :--- |
+| **Framework** | NestJS (v11) |
+| **Runtime** | Node.js (Serverless) |
+| **Database** | Supabase PostgreSQL |
+| **ORM** | Prisma (v7.8) + PrismaPg Adapter |
+| **Queue** | Upstash QStash (HTTP-based) |
+| **Push Service** | Firebase Cloud Messaging (FCM) |
+| **Monitoring** | Sentry, Axiom |
+
+---
+
+## 4. Kiến Trúc Hệ Thống (System Architecture)
+
+### Luồng dữ liệu (Data Flow)
+
+```mermaid
+graph TD
+    SePay[SePay Webhook] -->|POST| API[Vercel Serverless API]
+    API -->|Xác thực| Guard[SepayAuthGuard]
+    Guard -->|Đẩy tin nhắn| QStash[Upstash QStash Queue]
+    QStash -->|Retry/HTTP POST| Worker[Worker Endpoint]
+    Worker -->|Lưu trữ| DB[(Supabase PostgreSQL)]
+    Worker -->|Gửi Push| FCM[Firebase Cloud Messaging]
 ```
 
-## Compile and run the project
+---
 
-```bash
-# development
-$ npm run start
+## 5. Cấu Trúc Thư Mục (Project Structure)
 
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+```
+├── api/                  # Entry point cho Vercel Serverless
+├── prisma/               # Cấu hình Schema và Migrations
+├── src/
+│   ├── common/           # Guards, Filters, Middlewares dùng chung
+│   ├── logger/           # Tích hợp Axiom Service
+│   ├── notification/     # FCM Service
+│   ├── prisma/           # Prisma Singleton Service
+│   ├── queue/            # QStash Controller & Service
+│   ├── webhook/          # Logic cốt lõi tiếp nhận Webhook
+│   ├── app.module.ts     # Root Module (Config validation)
+│   ├── instrument.ts     # Khởi tạo Sentry sớm nhất
+│   └── main.ts           # Entry point cho Local Dev
 ```
 
-## Run tests
+---
 
-```bash
-# unit tests
-$ npm run test
+## 6. Cấu Hình Môi Trường (Environment Configuration)
 
-# e2e tests
-$ npm run test:e2e
+Hệ thống sử dụng file `.env` (không commit) và xác thực chặt chẽ qua `Joi` ngay khi khởi động.
+Xem chi tiết tại [.env.example](file:///Users/builong/Develop/private/sepay-proxy-backend/.env.example).
 
-# test coverage
-$ npm run test:cov
-```
+---
 
-## Deployment
+## 7. Hướng Dẫn Cài Đặt Local (Local Development Setup)
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+1. **Cài đặt dependencies**:
+   ```bash
+   npm install
+   ```
+2. **Cấu hình file `.env`**: Sao chép từ `.env.example` và điền thông tin thực tế.
+3. **Khởi động**:
+   ```bash
+   npm run start:dev
+   ```
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+---
 
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
+## 8. Quy Trình Làm Việc Với Database & Prisma
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+* **Prisma 7 Support**: Sử dụng `PrismaPg` adapter kết hợp Connection Pool.
+* **Migration**:
+  ```bash
+  npx prisma migrate dev
+  ```
 
-## Resources
+---
 
-Check out a few resources that may come in handy when working with NestJS:
+## 9. Xử Lý Hàng Đợi & Sự Kiện (Queue)
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+* Sử dụng **Upstash QStash** để tránh nghẽn luồng.
+* **Retry Strategy**: Tự động thử lại khi Worker Endpoint trả về mã lỗi >= 400.
 
-## Support
+---
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+## 10. Kiến Trúc Bảo Mật (Security)
 
-## Stay in touch
+* **Payload Validation**: Kiểm tra dữ liệu đầu vào qua DTO.
+* **Data Encryption**: Mã hóa API Key người dùng trước khi lưu DB.
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+---
 
-## License
+## 11. Giám Sát & Đo Lường (Observability)
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+* Log lỗi tự động đẩy lên Sentry.
+* Log nghiệp vụ/audit đẩy về Axiom.
+
+---
+
+## 12. Hướng Dẫn Triển Khai (Deployment Guide)
+
+Triển khai tự động qua GitHub Actions lên Vercel. Yêu cầu cấu hình đầy đủ Secrets trên GitHub Repo.
+
+---
+
+## 13. Chiến Lược Kiểm Thử (Testing Strategy)
+
+* Chạy Unit Test: `npm run test`
+* Chạy E2E Test: `npm run test:e2e`
+
+---
+
+## 14. Quy Trình Vận Hành (Operational Runbooks)
+
+* **Xoay vòng Encryption Key**: Cần chạy script re-encrypt toàn bộ DB trước khi đổi key mới.
+
+---
+
+## 15. Xử Lý Sự Cố (Troubleshooting)
+
+* Lỗi `EADDRINUSE`: Do tiến trình cũ chưa tắt, sử dụng `killall node` hoặc đổi cổng.
+
+---
+
+## 16. Khả Năng Mở Rộng (Scalability)
+
+* Kiến trúc Stateless cho phép scale ngang không giới hạn trên Vercel Edge/Serverless.
+
+---
+
+## 17. Tiêu Chuẩn Đóng Góp (Contribution Standards)
+
+* Tuân thủ ESLint và Prettier.
+* Tạo Pull Request qua nhánh `dev` trước khi merge vào `main`.
+
+---
+
+## 18. Checklist Sẵn Sàng Cho Production
+
+- [x] Cấu hình Pooling Database.
+- [x] Bật Sentry & Axiom.
+- [x] Mã hóa Secrets.
+
+---
+
+## 19. Bản Quyền
+
+Dự án phát triển nội bộ.

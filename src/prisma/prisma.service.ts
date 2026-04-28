@@ -3,43 +3,26 @@ import { PrismaClient } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
 
-const globalForPrisma = global as unknown as { prisma: PrismaClient };
+const globalForPrisma = global as unknown as {
+  pool: Pool;
+  adapter: PrismaPg;
+};
 
-let prismaInstance: PrismaClient;
-
-if (!globalForPrisma.prisma) {
+if (!globalForPrisma.pool) {
   const connectionString = process.env.DATABASE_URL;
-  const pool = new Pool({ connectionString });
-  const adapter = new PrismaPg(pool);
-  
-  globalForPrisma.prisma = new PrismaClient({
-    adapter,
-    log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
-  });
+  if (!connectionString) {
+    throw new Error('DATABASE_URL is missing in environment variables');
+  }
+  globalForPrisma.pool = new Pool({ connectionString });
+  globalForPrisma.adapter = new PrismaPg(globalForPrisma.pool);
 }
-
-prismaInstance = globalForPrisma.prisma;
 
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   constructor() {
-    super();
-    // Sử dụng Proxy để chuyển hướng toàn bộ cuộc gọi đến prismaInstance toàn cục
-    return new Proxy(this, {
-      get(target, prop, receiver) {
-        if (prop in prismaInstance) {
-          const value = (prismaInstance as any)[prop];
-          if (typeof value === 'function') {
-            return value.bind(prismaInstance);
-          }
-          return value;
-        }
-        const targetValue = (target as any)[prop];
-        if (typeof targetValue === 'function') {
-          return targetValue.bind(target);
-        }
-        return targetValue;
-      },
+    super({
+      adapter: globalForPrisma.adapter,
+      log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
     });
   }
 
@@ -48,9 +31,10 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   }
 
   async onModuleDestroy() {
-    // Không ngắt kết nối trên serverless để tái sử dụng connection pool
+    // Không đóng pool trên Serverless để tái sử dụng connection pool
   }
 }
+
 
 
 
