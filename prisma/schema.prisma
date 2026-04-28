@@ -54,23 +54,35 @@ model Transaction {
   amount           Float
   content          String?
   transferDate     DateTime
+  isRead           Boolean           @default(false)
+  category         String?
+  deletedAt        DateTime?
   createdAt        DateTime          @default(now())
   user             User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
   notificationLogs NotificationLog[]
 
   @@unique([sepayId, userId])
+  @@index([userId, transferDate])
   @@map("transactions")
 }
 
-model FcmToken {
-  id        String   @id @default(uuid())
-  userId    String
-  token     String   @unique
-  createdAt DateTime @default(now())
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+model FcmToken {
+  id         String    @id @default(uuid())
+  userId     String
+  token      String    @unique
+  deviceType String?
+  appVersion String?
+  lastActive DateTime  @default(now()) @updatedAt
+  isRevoked  Boolean   @default(false)
+  deletedAt  DateTime?
+  createdAt  DateTime  @default(now())
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRevoked])
   @@map("fcm_tokens")
 }
+
 
 model NotificationLog {
   id            String       @id @default(uuid())

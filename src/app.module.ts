@@ -7,7 +7,11 @@ import { LoggerModule } from './logger/logger.module';
 import { QueueModule } from './queue/queue.module';
 import { NotificationModule } from './notification/notification.module';
 import { AuthModule } from './auth/auth.module';
+import { DeviceModule } from './device/device.module';
+import { TransactionModule } from './transaction/transaction.module';
 import { ConfigModule } from '@nestjs/config';
+
+
 
 import { SentryModule } from '@sentry/nestjs/setup';
 import { APP_FILTER } from '@nestjs/core';
@@ -41,8 +45,12 @@ import * as Joi from 'joi';
     QueueModule,
     NotificationModule,
     AuthModule,
+    DeviceModule,
+    TransactionModule,
   ],
   controllers: [AppController],
+
+
 
   providers: [
     AppService,
