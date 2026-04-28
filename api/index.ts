@@ -4,7 +4,18 @@ import { AppModule } from '../src/app.module';
 import express from 'express';
 
 const server = express();
+
+// Lưu trữ Raw Body phục vụ cho việc xác thực chữ ký (Signature Verification)
+server.use(
+  express.json({
+    verify: (req: any, res, buf) => {
+      req.rawBody = buf;
+    },
+  }),
+);
+
 let isAppInitialized = false;
+
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, new ExpressAdapter(server));

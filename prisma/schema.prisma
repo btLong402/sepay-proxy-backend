@@ -2,6 +2,8 @@ datasource db {
   provider = "postgresql"
 }
 
+
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -33,7 +35,7 @@ model BankAccount {
 
 model Transaction {
   id               String            @id @default(uuid())
-  sepayId          String            @unique
+  sepayId          String
   userId           String?
   amount           Float
   content          String?
@@ -42,6 +44,7 @@ model Transaction {
   user             User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
   notificationLogs NotificationLog[]
 
+  @@unique([sepayId, userId])
   @@map("transactions")
 }
 

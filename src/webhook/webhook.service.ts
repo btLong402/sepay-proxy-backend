@@ -1,16 +1,21 @@
-import { Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, BadRequestException, Inject, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { decrypt } from '../utils/crypto';
+import { Prisma } from '@prisma/client';
 import { AxiomService } from '../logger/axiom.service';
+import { QstashService } from '../queue/qstash.service';
+import { FcmService } from '../notification/fcm.service';
 
 @Injectable()
 export class WebhookService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly axiom: AxiomService,
+    @Inject(forwardRef(() => QstashService))
+    private readonly qstashService: QstashService,
+    private readonly fcmService: FcmService,
   ) {}
 
-  async processWebhook(tenantId: string, payload: any, secret: string) {
+  async processWebhook(tenantId: string, payload: any) {
     // 1. Fetch Tenant/User
     const user = await this.prisma.user.findUnique({
       where: { id: tenantId },
@@ -20,32 +25,23 @@ export class WebhookService {
       throw new UnauthorizedException('Tenant not found');
     }
 
-    if (!user.encryptedWebhookSecret) {
-      throw new UnauthorizedException('Webhook secret not configured for this tenant');
-    }
+    // 2. Đẩy vào QStash Queue để xử lý bất đồng bộ
+    await this.qstashService.publishWebhookEvent(tenantId, payload);
 
-    // 2. Verify Secret/API Key
-    let decryptedSecret: string;
-    try {
-      decryptedSecret = decrypt(user.encryptedWebhookSecret);
-    } catch (error) {
-      throw new InternalError('Failed to decrypt tenant secret');
-    }
+    return { success: true, message: 'Webhook queued successfully' };
+  }
 
-    if (secret !== decryptedSecret) {
-      throw new UnauthorizedException('Invalid authentication secret');
-    }
-
-    // 3. Store Raw Webhook Event
-    await this.prisma.webhookEvent.create({
-      data: {
-        provider: 'SEPAY',
-        payload: payload,
-        processedStatus: 'RECEIVED',
-      },
+  async handleQStashEvent(tenantId: string, payload: any) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: tenantId },
+      include: { fcmTokens: true },
     });
 
-    // 4. Extract Data
+    if (!user) {
+      throw new Error('Tenant not found during async processing');
+    }
+
+    // 1. Extract Data
     const sepayId = payload.id?.toString();
     const amount = parseFloat(payload.amount_in || payload.amount || '0');
     const content = payload.transaction_content || payload.content;
@@ -55,41 +51,110 @@ export class WebhookService {
       throw new BadRequestException('Missing SePay transaction ID in payload');
     }
 
-    // 5. Check Idempotency
-    const existingTx = await this.prisma.transaction.findUnique({
-      where: { sepayId },
-    });
-
-    if (existingTx) {
-      // Already processed, return success to avoid SePay retries
-      return { success: true, message: 'Transaction already processed' };
-    }
-
-    // 6. Save Transaction
     const transferDate = transferDateStr ? new Date(transferDateStr) : new Date();
 
-    await this.prisma.transaction.create({
-      data: {
-        sepayId,
-        userId: user.id,
-        amount,
-        content,
-        transferDate,
+    // 2. Đảm bảo Transaction tồn tại (Idempotency Check)
+    let transaction = await this.prisma.transaction.findUnique({
+      where: {
+        sepayId_userId: {
+          sepayId,
+          userId: user.id,
+        },
       },
     });
 
+    if (!transaction) {
+      try {
+        transaction = await this.prisma.$transaction(
+          async (tx) => {
+            await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${sepayId}))`;
+
+            const existing = await tx.transaction.findUnique({
+              where: {
+                sepayId_userId: {
+                  sepayId,
+                  userId: user.id,
+                },
+              },
+            });
+            if (existing) return existing;
+
+            return tx.transaction.create({
+              data: {
+                sepayId,
+                userId: user.id,
+                amount,
+                content,
+                transferDate,
+              },
+            });
+          },
+          {
+            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+          },
+        );
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+          transaction = await this.prisma.transaction.findUnique({
+            where: {
+              sepayId_userId: {
+                sepayId,
+                userId: user.id,
+              },
+            },
+          });
+        } else {
+          throw error;
+        }
+      }
+    }
+
+    if (!transaction) {
+      throw new Error('Failed to fetch or create transaction');
+    }
+
+    // 3. Gửi FCM Notification và đối soát (Audit)
+    if (user.fcmTokens && user.fcmTokens.length > 0) {
+      // Lấy danh sách các thiết bị đã gửi thông báo thành công trước đó
+      const existingLogs = await this.prisma.notificationLog.findMany({
+        where: {
+          transactionId: transaction.id,
+          status: 'SUCCESS',
+        },
+      });
+      const successfulTokenIds = existingLogs.map((log) => log.fcmTokenId);
+
+      for (const tokenObj of user.fcmTokens) {
+        // Bỏ qua nếu token này đã nhận được thông báo thành công
+        if (successfulTokenIds.includes(tokenObj.id)) {
+          continue;
+        }
+
+        const result = await this.fcmService.sendMoneyIn(tokenObj.token, amount, content);
+
+        // Lưu log trạng thái gửi
+        await this.prisma.notificationLog.create({
+          data: {
+            transactionId: transaction.id,
+            fcmTokenId: tokenObj.id,
+            status: result.success ? 'SUCCESS' : 'FAILED',
+            errorReason: result.success ? null : result.error,
+          },
+        });
+      }
+    }
+
+    // 4. Lưu log vào Axiom
     await this.axiom.logEvent({
       event: 'transaction_processed',
       tenantId,
       sepayId,
       amount,
     });
-
-    // TODO: Phase 3 - Trigger FCM Notification
-
-    return { success: true, message: 'Webhook processed successfully' };
   }
 }
 
 class InternalError extends Error {}
+
+
 
